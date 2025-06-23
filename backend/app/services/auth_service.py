@@ -1,0 +1,85 @@
+"""
+auth_service.py
+
+Business logic for registration, login, and token management.
+
+- Handles user registration (with password hashing and uniqueness checks)
+- Handles user authentication (login)
+- Can be extended for refresh tokens, email verification, etc.
+"""
+
+from sqlalchemy.orm import Session
+from app.db.models import User
+from app.schemas.auth import UserRegister, UserLogin
+from app.core.security import hash_password, verify_password, create_access_token, create_refresh_token
+from fastapi import HTTPException, status
+from app.core.security import decode_token
+
+def register_user(db: Session, user_in: UserRegister) -> User:
+    """
+    Register a new user.
+    - Checks for unique email and username.
+    - Hashes the password before storing.
+    - Sets is_active to True and is_verified to False (for email verification).
+    """
+    if db.query(User).filter(User.email == user_in.email).first():
+        raise HTTPException(status_code=400, detail="Email already registered")
+    if db.query(User).filter(User.username == user_in.username).first():
+        raise HTTPException(status_code=400, detail="Username already taken")
+    user = User(
+        email=user_in.email,
+        username=user_in.username,
+        hashed_password=hash_password(user_in.password),
+        is_active=True,
+        is_verified=False
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+def authenticate_user(db: Session, email: str, password: str) -> User:
+    """
+    Authenticate a user by email and password.
+    - Returns the user if credentials are valid, else None.
+    """
+    user = db.query(User).filter(User.email == email).first()
+    if not user or not verify_password(password, user.hashed_password):
+        return None
+    return user
+
+
+def refresh_access_token(db: Session, refresh_token: str) -> str:
+    """
+    Validate the refresh token and return a new access token.
+    """
+    payload = decode_token(refresh_token)
+    if payload is None or "sub" not in payload:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+    user_id = int(payload["sub"])
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or not user.is_active:
+        raise HTTPException(status_code=401, detail="User not found or inactive")
+    # Optionally: check if refresh_token matches user's stored token for extra security
+    return create_access_token({"sub": str(user.id)})
+
+def change_user_password(db: Session, user: User, old_password: str, new_password: str):
+    """
+    Change the user's password after verifying the old password.
+    """
+    from app.core.security import verify_password, hash_password
+    if not verify_password(old_password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Old password is incorrect")
+    user.hashed_password = hash_password(new_password)
+    db.commit()
+    db.refresh(user)
+    return user
+
+def logout_user(db: Session, user: User):
+    """
+    Invalidate the user's refresh token (logout).
+    """
+    user.refresh_token = None
+    db.commit()
+    db.refresh(user)
+    return True
