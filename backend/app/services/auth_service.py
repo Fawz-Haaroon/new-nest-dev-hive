@@ -4,16 +4,22 @@ auth_service.py
 Business logic for registration, login, and token management.
 
 - Handles user registration (with password hashing and uniqueness checks)
-- Handles user authentication (login)
+- Handles user authentication (login with email or username)
 - Can be extended for refresh tokens, email verification, etc.
 """
 
 from sqlalchemy.orm import Session
 from app.db.models import User
-from app.schemas.auth import UserRegister, UserLogin
-from app.core.security import hash_password, verify_password, create_access_token, create_refresh_token
+from app.schemas.auth import UserRegister
+from app.core.security import (
+    hash_password,
+    verify_password,
+    create_access_token,
+    create_refresh_token,
+    decode_token
+)
 from fastapi import HTTPException, status
-from app.core.security import decode_token
+from typing import Optional
 
 def register_user(db: Session, user_in: UserRegister) -> User:
     """
@@ -38,16 +44,25 @@ def register_user(db: Session, user_in: UserRegister) -> User:
     db.refresh(user)
     return user
 
-def authenticate_user(db: Session, email: str, password: str) -> User:
+def authenticate_user(
+    db: Session,
+    email: Optional[str] = None,
+    username: Optional[str] = None,
+    password: str = ""
+) -> Optional[User]:
     """
-    Authenticate a user by email and password.
-    - Returns the user if credentials are valid, else None.
+    Authenticate a user using either email or username, and verify password.
+    - Returns user if credentials are valid, else None.
     """
-    user = db.query(User).filter(User.email == email).first()
+    user = None
+    if email:
+        user = db.query(User).filter(User.email == email).first()
+    elif username:
+        user = db.query(User).filter(User.username == username).first()
+
     if not user or not verify_password(password, user.hashed_password):
         return None
     return user
-
 
 def refresh_access_token(db: Session, refresh_token: str) -> str:
     """
@@ -67,7 +82,6 @@ def change_user_password(db: Session, user: User, old_password: str, new_passwor
     """
     Change the user's password after verifying the old password.
     """
-    from app.core.security import verify_password, hash_password
     if not verify_password(old_password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Old password is incorrect")
     user.hashed_password = hash_password(new_password)

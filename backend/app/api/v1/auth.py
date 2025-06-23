@@ -14,11 +14,13 @@ How to use:
 - Extend with email verification, password reset, etc. as needed.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Form
 from sqlalchemy.orm import Session
+import re
+
 from app.db.session import SessionLocal
 from app.schemas.auth import (
-    UserRegister, UserLogin, Token, UserPublic,
+    UserRegister, Token, UserPublic,
     RefreshTokenRequest, ChangePasswordRequest
 )
 from app.services.auth_service import (
@@ -55,16 +57,29 @@ def api_register(user_in: UserRegister, db: Session = Depends(get_db)):
     user = register_user(db, user_in)
     return user
 
-# --- Login and get JWT tokens ---
+# --- Login and return JWT tokens ---
 @router.post("/login", response_model=Token)
-def api_login(user_in: UserLogin, db: Session = Depends(get_db)):
+def api_login(
+    login_field: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db)
+):
     """
-    Authenticate user and return JWT access & refresh tokens.
-    - Returns 401 if credentials are invalid.
+    Authenticate user by email or username.
+    Accepts form-encoded input (for Swagger OAuth2 compatibility).
     """
-    user = authenticate_user(db, user_in.email, user_in.password)
+    is_email = "@" in login_field or re.match(r"[^@]+@[^@]+\.[^@]+", login_field)
+
+    user = authenticate_user(
+        db,
+        email=login_field if is_email else None,
+        username=login_field if not is_email else None,
+        password=password
+    )
+
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
+
     access_token = create_access_token({"sub": str(user.id)})
     refresh_token = create_refresh_token({"sub": str(user.id)})
     return Token(access_token=access_token, refresh_token=refresh_token)
@@ -96,17 +111,6 @@ def api_change_password(
     return user
 
 # --- Logout endpoint ---
-@router.post("/logout")
-def api_logout(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Log out the current user (invalidate refresh token).
-    """
-    logout_user(db, current_user)
-    return {"detail": "Logged out successfully"}
-
 @router.post("/logout")
 def api_logout(
     db: Session = Depends(get_db),
